@@ -293,16 +293,67 @@ class RiskManager:
         
         # Calculate new stop loss based on current price
         if side == "BUY":  # Long position
+            # For long positions: 
+            # 1. Check if price has moved in our favor (price > entry_price)
+            # 2. Only adjust stop loss if price moved in our favor
+            # 3. Never adjust stop loss below previous level
+            if current_price <= entry_price:
+                # Price is moving against us - don't adjust stop loss
+                logger.debug(f"Not adjusting trailing stop for long position: price ({current_price}) <= entry price ({entry_price})")
+                return None
+                
             new_stop = current_price * (1 - trailing_stop_pct)
-            # Only move stop loss up, never down
-            current_stop = self.calculate_stop_loss(symbol, side, entry_price)
+            
+            # Get current stop loss orders from open orders
+            current_stop = None
+            try:
+                open_orders = self.binance_client.get_open_orders(symbol)
+                for order in open_orders:
+                    if order.get('type') in ['STOP_MARKET', 'STOP'] and order.get('side') == 'SELL':
+                        current_stop = float(order.get('stopPrice', 0))
+                        break
+            except Exception as e:
+                logger.error(f"Error getting current stop loss: {e}")
+                current_stop = self.calculate_stop_loss(symbol, side, entry_price)
+            
+            # If no active stop loss order found, fall back to calculated value
+            if not current_stop:
+                current_stop = self.calculate_stop_loss(symbol, side, entry_price)
+                
+            # Only move stop loss up, never down (protect profits)
             if current_stop and new_stop <= current_stop:
                 logger.debug(f"Not adjusting trailing stop for long position: current ({current_stop}) > calculated ({new_stop})")
                 return None
+                
         else:  # Short position
+            # For short positions:
+            # 1. Check if price has moved in our favor (price < entry_price)
+            # 2. Only adjust stop loss if price moved in our favor
+            # 3. Never adjust stop loss above previous level
+            if current_price >= entry_price:
+                # Price is moving against us - don't adjust stop loss
+                logger.debug(f"Not adjusting trailing stop for short position: price ({current_price}) >= entry price ({entry_price})")
+                return None
+                
             new_stop = current_price * (1 + trailing_stop_pct)
-            # Only move stop loss down, never up
-            current_stop = self.calculate_stop_loss(symbol, side, entry_price)
+            
+            # Get current stop loss orders from open orders
+            current_stop = None
+            try:
+                open_orders = self.binance_client.get_open_orders(symbol)
+                for order in open_orders:
+                    if order.get('type') in ['STOP_MARKET', 'STOP'] and order.get('side') == 'BUY':
+                        current_stop = float(order.get('stopPrice', 0))
+                        break
+            except Exception as e:
+                logger.error(f"Error getting current stop loss: {e}")
+                current_stop = self.calculate_stop_loss(symbol, side, entry_price)
+            
+            # If no active stop loss order found, fall back to calculated value
+            if not current_stop:
+                current_stop = self.calculate_stop_loss(symbol, side, entry_price)
+                
+            # Only move stop loss down, never up (protect profits)
             if current_stop and new_stop >= current_stop:
                 logger.debug(f"Not adjusting trailing stop for short position: current ({current_stop}) < calculated ({new_stop})")
                 return None
@@ -359,7 +410,17 @@ class RiskManager:
         
         # Calculate the current dynamic take profit level based on the current price
         if side == 'BUY':  # Long position
-            # For long positions, we want take profit to trail above the price
+            # For long positions:
+            # 1. Only adjust take profit if price moved in our favor (price > entry_price)
+            # 2. Never adjust take profit lower than previous level
+            
+            # Check if price moved in our favor
+            if current_price <= entry_price:
+                # Price is not in our favor, don't adjust take profit
+                logger.debug(f"Not adjusting trailing take profit for long position: price ({current_price}) <= entry price ({entry_price})")
+                return None
+                
+            # Calculate new take profit level
             current_take_profit = current_price * (1 + trailing_take_profit_pct)
             current_take_profit = math.floor(current_take_profit * 10**price_precision) / 10**price_precision
             
@@ -390,7 +451,17 @@ class RiskManager:
                 return None
                 
         elif side == 'SELL':  # Short position
-            # For short positions, we want take profit to trail below the price
+            # For short positions:
+            # 1. Only adjust take profit if price moved in our favor (price < entry_price)
+            # 2. Never adjust take profit higher than previous level
+            
+            # Check if price moved in our favor
+            if current_price >= entry_price:
+                # Price is not in our favor, don't adjust take profit
+                logger.debug(f"Not adjusting trailing take profit for short position: price ({current_price}) >= entry price ({entry_price})")
+                return None
+                
+            # Calculate new take profit level
             current_take_profit = current_price * (1 - trailing_take_profit_pct)
             current_take_profit = math.ceil(current_take_profit * 10**price_precision) / 10**price_precision
             
